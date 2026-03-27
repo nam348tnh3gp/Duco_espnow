@@ -47,16 +47,20 @@ uint8_t hashArray[20];
 String lastBlockHash;
 String expectedHashStr;
 uint8_t expectedHash[20];
+uint32_t difficulty = 0;
 
 // Statistics
 unsigned long shares = 0;
 unsigned long acceptedShares = 0;
+float averageHashrate = 0;
+unsigned long hashSamples = 0;
+float totalHashrate = 0;
 
 // Callback when data is sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   #if defined(SERIAL_PRINTING)
-    if(status == ESP_NOW_SEND_SUCCESS) {
-      // Optional: log success
+    if(status != ESP_NOW_SEND_SUCCESS) {
+      Serial.printf("Slave %d: Send failed\n", SLAVE_ID);
     }
   #endif
 }
@@ -130,7 +134,14 @@ void sendResult(uint32_t counter, float hashrate, float elapsedTime, bool accept
   sendData.isAccepted = accepted;
   sendData.jobId = currentJobId;
   
-  esp_now_send(masterMac, (uint8_t*)&sendData, sizeof(sendData));
+  esp_err_t result = esp_now_send(masterMac, (uint8_t*)&sendData, sizeof(sendData));
+  
+  #if defined(SERIAL_PRINTING)
+    if(result == ESP_OK) {
+      Serial.printf("Slave %d: Result sent - counter=%lu, hr=%.2f\n", 
+                    SLAVE_ID, counter, hashrate/1000);
+    }
+  #endif
 }
 
 void mine() {
@@ -149,20 +160,22 @@ void mine() {
       shares++;
       
       float currentHashrate = counter / elapsed_time_s;
-      bool accepted = false;
+      
+      // Update average hashrate
+      totalHashrate += currentHashrate;
+      hashSamples++;
+      averageHashrate = totalHashrate / hashSamples;
       
       // Check if share is accepted (always true for slave, master will validate)
-      accepted = true;
+      bool accepted = true;
       
       if(accepted) {
         acceptedShares++;
       }
       
-      hashrate = currentHashrate;
-      
       #if defined(SERIAL_PRINTING)
-        Serial.printf("Slave %d found share: counter=%lu, hr=%.2f kH/s, time=%.2fs\n",
-                      SLAVE_ID, counter.getVal(), currentHashrate/1000, elapsed_time_s);
+        Serial.printf("Slave %d found share: counter=%lu, hr=%.2f kH/s, time=%.2fs, avg=%.2f kH/s\n",
+                      SLAVE_ID, counter.getVal(), currentHashrate/1000, elapsed_time_s, averageHashrate/1000);
       #endif
       
       // Send result to master
@@ -176,6 +189,11 @@ void mine() {
       #endif
       
       break;
+    }
+    
+    // Yield occasionally to prevent watchdog
+    if(counter.getVal() % 10000 == 0) {
+      delay(1);
     }
   }
 }
