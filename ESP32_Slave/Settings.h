@@ -4,7 +4,7 @@
 
 // ---------------------- General settings ---------------------- //
 #define MASTER_MAC {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}  // Thay bằng MAC của master
-#define SLAVE_ID 1  // ID từ 1-9
+#define SLAVE_ID 1  // ID từ 1-10
 // -------------------------------------------------------------- //
 
 // -------------------- Advanced options ------------------------ //
