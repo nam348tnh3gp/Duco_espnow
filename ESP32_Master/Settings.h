@@ -1,4 +1,4 @@
-// Settings.h - Master
+// Settings.h - Master (bổ sung)
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
@@ -19,6 +19,10 @@ extern const char PASSWORD[] = "your_pass"; // WiFi password
 #define MAX_SLAVES 10
 #define MAX_JOBS 10
 #define SYNC_INTERVAL 30000  // Sync interval (ms)
+
+// Timeout settings
+#define SLAVE_TIMEOUT_MS 30000  // 30 seconds timeout for slaves
+#define JOB_COMPLETION_TIMEOUT_MS 600000  // 10 minutes max per job
 
 // -------------------------------------------------------------- //
 
