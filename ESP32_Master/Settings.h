@@ -16,7 +16,8 @@ extern const char PASSWORD[] = "your_pass"; // WiFi password
 
 // ESP-NOW Configuration
 #define ESPNOW_CHANNEL 1
-#define MAX_SLAVES 9
+#define MAX_SLAVES 10
+#define MAX_JOBS 10
 #define SYNC_INTERVAL 30000  // Sync interval (ms)
 
 // -------------------------------------------------------------- //
