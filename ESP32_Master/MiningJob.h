@@ -1,6 +1,3 @@
-#include "esp_task_wdt.h"
-#pragma GCC optimize("-Ofast")
-
 #ifndef MINING_JOB_H
 #define MINING_JOB_H
 
@@ -14,6 +11,10 @@
 #include "DSHA1.h"
 #include "Counter.h"
 #include "Settings.h"
+
+#ifdef ESP32
+#include "esp_task_wdt.h"
+#endif
 
 // Base36 conversion table
 const char base36Chars[36] PROGMEM = {
@@ -34,6 +35,9 @@ const uint8_t base36CharValues[75] PROGMEM{
 #define END_TOKEN '\n'
 #define SEP_TOKEN ','
 #define IOT_TOKEN '@'
+
+// Khai báo biến toàn cục
+extern double hashrate_core_two;
 
 struct MiningConfig {
     String host = "";
@@ -61,6 +65,9 @@ public:
     MiningConfig *config;
     int core = 0;
     bool lastShareAccepted = false;
+    uint32_t share_count = 0;
+    uint32_t accepted_share_count = 0;
+    float hashrate = 0;
 
     MiningJob(int core, MiningConfig *config) {
         this->core = core;
@@ -102,7 +109,9 @@ public:
 
     void handleSystemEvents(void) {
         #if defined(ESP32)
-            esp_task_wdt_reset();
+            #ifdef CONFIG_ESP_TASK_WDT_EN
+                esp_task_wdt_reset();
+            #endif
         #endif
         delay(1);
         yield();
@@ -145,30 +154,8 @@ public:
             Serial.println("Core [" + String(core) + "] - Requesting job for user: " + config->DUCO_USER);
         #endif
 
-        #if defined(USE_DS18B20)
-            sensors.requestTemperatures(); 
-            float temp = sensors.getTempCByIndex(0);
-            client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
-                        SEP_TOKEN + config->MINER_KEY + SEP_TOKEN + "Temp:" + String(temp) + "*C" + END_TOKEN);
-        #elif defined(USE_DHT)
-            float temp = dht.readTemperature();
-            float hum = dht.readHumidity();
-            client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
-                        SEP_TOKEN + config->MINER_KEY + SEP_TOKEN + "Temp:" + String(temp) + "*C" +
-                        IOT_TOKEN + "Hum:" + String(hum) + "%" + END_TOKEN);
-        #elif defined(USE_HSU07M)
-            float temp = read_hsu07m();
-            client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
-                        SEP_TOKEN + config->MINER_KEY + SEP_TOKEN + "Temp:" + String(temp) + "*C" + END_TOKEN);
-        #elif defined(USE_INTERNAL_SENSOR)
-            float temp = 0;
-            temp_sensor_read_celsius(&temp);
-            client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
-                        SEP_TOKEN + config->MINER_KEY + SEP_TOKEN + "CPU Temp:" + String(temp) + "*C" + END_TOKEN);
-        #else
-            client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
-                        SEP_TOKEN + config->MINER_KEY + END_TOKEN);
-        #endif
+        client.print("JOB," + config->DUCO_USER + SEP_TOKEN + config->START_DIFF + 
+                    SEP_TOKEN + config->MINER_KEY + END_TOKEN);
 
         waitForClientData();
         
@@ -259,10 +246,6 @@ public:
                 
                 submit(counter, currentHashrate, elapsed_time_s);
                 
-                #if defined(BLUSHYBOX)
-                    gauge_set(hashrate + hashrate_core_two);
-                #endif
-                
                 break;
             }
         }
@@ -324,10 +307,11 @@ protected:
     DSHA1 *dsha1;
     WiFiClient client;
     String chipID = "";
-    float hashrate = 0;
     uint32_t difficulty = 0;
     uint32_t share_count_local = 0;
     uint32_t accepted_share_count_local = 0;
+    unsigned long ping = 0;
+    String node_id = "";
 
     #if defined(ESP8266)
         #if defined(BLUSHYBOX)
