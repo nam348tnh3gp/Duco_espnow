@@ -4,9 +4,9 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 
-// Cấu hình WiFi
-const char* ap_ssid = "ESP32_Config";
-const char* ap_password = "12345678";
+// Cấu hình mặc định
+const char* default_ap_ssid = "ESP32_AP";
+const char* default_ap_password = "12345678";
 
 // Cấu hình IP cố định cho AP
 IPAddress ap_local_ip(192, 168, 4, 1);
@@ -27,23 +27,27 @@ const long interval = 30000;
 Preferences preferences;
 String saved_ssid = "";
 String saved_password = "";
+String saved_ap_ssid = "";
+String saved_ap_password = "";
 bool stationConnected = false;
 unsigned long lastConnectionAttempt = 0;
-bool isConfigMode = true;  // Bắt đầu ở chế độ cấu hình
+bool isConfigMode = true;
 
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n╔═══════════════════════════════════╗");
-    Serial.println("║   ESP32 WiFi Router v3.0        ║");
-    Serial.println("║      with Auto Fallback         ║");
+    Serial.println("║   ESP32 WiFi Router v4.0        ║");
+    Serial.println("║   Full Configuration Support    ║");
     Serial.println("╚═══════════════════════════════════╝\n");
     
     // Khởi tạo Preferences
     preferences.begin("wifi-config", false);
-    saved_ssid = preferences.getString("ssid", "");
-    saved_password = preferences.getString("password", "");
+    saved_ssid = preferences.getString("sta_ssid", "");
+    saved_password = preferences.getString("sta_pass", "");
+    saved_ap_ssid = preferences.getString("ap_ssid", default_ap_ssid);
+    saved_ap_password = preferences.getString("ap_pass", default_ap_password);
     
-    // 1. Luôn khởi tạo AP trước
+    // 1. Khởi tạo AP với cấu hình đã lưu
     setupAccessPoint();
     
     // 2. Cấu hình DNS và Web Server
@@ -66,17 +70,10 @@ void setup() {
 }
 
 void loop() {
-    // Xử lý DNS và Web server
     dnsServer.processNextRequest();
     webServer.handleClient();
-    
-    // Kiểm tra và tự động reconnect station
     handleStationReconnect();
-    
-    // Kiểm tra internet định kỳ
     handlePeriodicInternetCheck();
-    
-    // Kiểm tra timeout kết nối Station
     checkStationConnectionTimeout();
 }
 
@@ -85,19 +82,18 @@ void loop() {
 void setupAccessPoint() {
     Serial.println("\n📱 Setting up Access Point...");
     
-    // Luôn set AP mode với channel cố định
     WiFi.mode(WIFI_AP);
-    
-    // Cấu hình IP cố định cho AP
     WiFi.softAPConfig(ap_local_ip, ap_gateway, ap_subnet);
     
-    // Khởi tạo AP với channel cố định (không phụ thuộc station)
-    bool apStarted = WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
+    String ap_ssid = saved_ap_ssid.length() > 0 ? saved_ap_ssid : String(default_ap_ssid);
+    String ap_pass = saved_ap_password.length() > 0 ? saved_ap_password : String(default_ap_password);
+    
+    bool apStarted = WiFi.softAP(ap_ssid.c_str(), ap_pass.c_str(), 6, 0, 4);
     
     if (apStarted) {
         Serial.println("✅ AP started successfully!");
-        Serial.printf("   🏠 SSID: %s\n", ap_ssid);
-        Serial.printf("   🔑 Password: %s\n", ap_password);
+        Serial.printf("   🏠 SSID: %s\n", ap_ssid.c_str());
+        Serial.printf("   🔑 Password: %s\n", ap_pass.c_str());
         Serial.printf("   🌐 IP Address: %s\n", WiFi.softAPIP().toString().c_str());
         Serial.printf("   📻 Channel: 6\n");
         Serial.printf("   👥 Max clients: 4\n");
@@ -115,7 +111,6 @@ void connectToStation() {
     Serial.println("\n📡 Connecting to Station...");
     Serial.printf("   SSID: %s\n", saved_ssid.c_str());
     
-    // Chuyển sang chế độ AP+STA
     WiFi.mode(WIFI_AP_STA);
     WiFi.begin(saved_ssid.c_str(), saved_password.c_str());
     
@@ -127,7 +122,6 @@ void connectToStation() {
         Serial.print(".");
         attempt++;
         
-        // Nếu quá 5 giây chưa kết nối, hiển thị cảnh báo
         if (attempt == 10) {
             Serial.println("\n   ⏳ Taking longer than expected...");
         }
@@ -141,36 +135,34 @@ void connectToStation() {
         Serial.printf("   🚪 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
         Serial.printf("   📶 Signal: %d dBm\n", WiFi.RSSI());
         
-        // Kiểm tra internet
         delay(1000);
         checkInternetConnection();
     } else {
         stationConnected = false;
         Serial.println("\n❌ Station connection failed!");
         Serial.println("   🔄 Keeping AP mode active for reconfiguration");
-        Serial.printf("   📱 Connect to '%s' to fix settings\n", ap_ssid);
         
-        // Quay lại chế độ AP-only
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
+        String ap_ssid = saved_ap_ssid.length() > 0 ? saved_ap_ssid : String(default_ap_ssid);
+        String ap_pass = saved_ap_password.length() > 0 ? saved_ap_password : String(default_ap_password);
+        WiFi.softAP(ap_ssid.c_str(), ap_pass.c_str(), 6, 0, 4);
     }
 }
 
 void checkStationConnectionTimeout() {
-    // Nếu đang cố kết nối nhưng quá 30 giây chưa thành công
     if (!stationConnected && saved_ssid.length() > 0 && 
         millis() - lastConnectionAttempt > 30000) {
         
         Serial.println("\n⏰ Station connection timeout!");
         Serial.println("   🔄 Switching back to AP-only mode");
         
-        // Reset và quay lại AP mode
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
+        String ap_ssid = saved_ap_ssid.length() > 0 ? saved_ap_ssid : String(default_ap_ssid);
+        String ap_pass = saved_ap_password.length() > 0 ? saved_ap_password : String(default_ap_password);
+        WiFi.softAP(ap_ssid.c_str(), ap_pass.c_str(), 6, 0, 4);
         stationConnected = false;
         isConfigMode = true;
         
-        // Hiển thị lại thông tin
         displayConnectionInfo();
     }
 }
@@ -178,18 +170,15 @@ void checkStationConnectionTimeout() {
 void setupDNSAndWebServer() {
     Serial.println("\n🌐 Setting up DNS & Web Server...");
     
-    // DNS server cho captive portal
     dnsServer.start(DNS_PORT, "*", ap_local_ip);
     
-    // Web server routes
     webServer.on("/", handleRoot);
     webServer.on("/status", handleStatusJSON);
     webServer.on("/scan", handleWiFiScan);
-    webServer.on("/configure", handleConfigure);
-    webServer.on("/save", HTTP_POST, handleSave);
+    webServer.on("/save-station", HTTP_POST, handleSaveStation);
+    webServer.on("/save-ap", HTTP_POST, handleSaveAP);
     webServer.on("/reboot", handleReboot);
     webServer.on("/reset", handleResetConfig);
-    webServer.on("/switchmode", handleSwitchMode);
     webServer.onNotFound(handleNotFound);
     
     webServer.begin();
@@ -208,8 +197,12 @@ void displayConnectionInfo() {
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.println("║        ESP32 IS READY!                ║");
     Serial.println("╠════════════════════════════════════════╣");
-    Serial.printf("║ AP:      %-30s║\n", ap_ssid);
-    Serial.printf("║ Password:%-30s║\n", ap_password);
+    
+    String current_ap = saved_ap_ssid.length() > 0 ? saved_ap_ssid : String(default_ap_ssid);
+    String current_ap_pass = saved_ap_password.length() > 0 ? saved_ap_password : String(default_ap_password);
+    
+    Serial.printf("║ AP:      %-30s║\n", current_ap.c_str());
+    Serial.printf("║ Password:%-30s║\n", current_ap_pass.c_str());
     Serial.printf("║ IP:      %-30s║\n", ap_local_ip.toString().c_str());
     
     if (stationConnected && WiFi.status() == WL_CONNECTED) {
@@ -218,18 +211,11 @@ void displayConnectionInfo() {
         Serial.printf("║ Internet: %-31s║\n", internetAvailable ? "✅ AVAILABLE" : "❌ UNAVAILABLE");
     } else {
         Serial.printf("║ Mode:    %-30s║\n", "CONFIGURATION MODE");
-        Serial.printf("║ Status:  %-30s║\n", "Waiting for WiFi config");
+        Serial.printf("║ Status:  %-30s║\n", "Waiting for config");
     }
     
     Serial.printf("║ Clients: %d connected%-24s║\n", WiFi.softAPgetStationNum(), "");
     Serial.println("╚════════════════════════════════════════╝\n");
-    
-    if (!stationConnected) {
-        Serial.println("📱 IMPORTANT:");
-        Serial.printf("   1. Connect to WiFi: %s\n", ap_ssid);
-        Serial.printf("   2. Open browser: http://%s\n", ap_local_ip.toString().c_str());
-        Serial.println("   3. Configure your WiFi network\n");
-    }
 }
 
 // ========== HÀM KIỂM TRA ==========
@@ -244,7 +230,6 @@ void checkInternetConnection() {
         Serial.println("✅ Internet connection: AVAILABLE");
     } else {
         Serial.println("❌ Internet connection: NOT AVAILABLE");
-        Serial.println("   💡 You can still access http://192.168.4.1 to reconfigure");
     }
 }
 
@@ -299,31 +284,41 @@ void handlePeriodicInternetCheck() {
 // ========== WEB HANDLERS ==========
 
 void handleRoot() {
+    String current_ap = saved_ap_ssid.length() > 0 ? saved_ap_ssid : String(default_ap_ssid);
+    String current_ap_pass = saved_ap_password.length() > 0 ? saved_ap_password : String(default_ap_password);
+    
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>ESP32 WiFi Router</title>";
     html += "<style>";
     html += "*{margin:0;padding:0;box-sizing:border-box;}";
     html += "body{font-family:'Segoe UI',Arial;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px;}";
-    html += ".container{max-width:800px;margin:0 auto;}";
+    html += ".container{max-width:900px;margin:0 auto;}";
     html += ".card{background:white;border-radius:15px;padding:20px;margin-bottom:20px;box-shadow:0 10px 30px rgba(0,0,0,0.2);}";
     html += ".header{text-align:center;color:white;margin-bottom:20px;}";
     html += "h1{font-size:2em;margin-bottom:10px;}";
-    html += "h2{color:#333;margin-bottom:15px;}";
+    html += "h2{color:#333;margin-bottom:15px;border-bottom:2px solid #667eea;padding-bottom:10px;}";
     html += ".status-badge{display:inline-block;padding:5px 15px;border-radius:20px;font-weight:bold;}";
     html += ".online{background:#d4edda;color:#155724;}";
     html += ".offline{background:#f8d7da;color:#721c24;}";
     html += ".config-mode{background:#fff3cd;color:#856404;}";
     html += "table{width:100%;border-collapse:collapse;}";
     html += "td,th{padding:12px;text-align:left;border-bottom:1px solid #ddd;}";
-    html += ".button{display:inline-block;padding:10px 20px;margin:5px;background:#667eea;color:white;text-decoration:none;border-radius:5px;}";
+    html += "input, select{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;font-size:16px;}";
+    html += ".button{display:inline-block;padding:10px 20px;margin:5px;background:#667eea;color:white;text-decoration:none;border-radius:5px;border:none;cursor:pointer;}";
     html += ".button-red{background:#dc3545;}";
+    html += ".button-green{background:#28a745;}";
     html += ".footer{text-align:center;color:white;margin-top:20px;}";
+    html += ".warning{background:#fff3cd;border-left:4px solid #ffc107;padding:10px;margin:10px 0;border-radius:5px;}";
+    html += "small{color:#666;}";
+    html += ".grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}";
+    html += "@media (max-width:600px){.grid-2{grid-template-columns:1fr;}}";
     html += "</style></head><body>";
     
     html += "<div class='container'>";
     html += "<div class='header'>";
     html += "<h1>📡 ESP32 WiFi Router</h1>";
+    html += "<p>Advanced Configuration Panel</p>";
     html += "</div>";
     
     // Status Card
@@ -333,7 +328,6 @@ void handleRoot() {
     if (!stationConnected || WiFi.status() != WL_CONNECTED) {
         html += "<div class='status-badge config-mode'>⚠️ CONFIGURATION MODE</div>";
         html += "<p>No WiFi connection configured or connection failed.</p>";
-        html += "<p>Please configure your WiFi network below.</p>";
     } else {
         String statusClass = internetAvailable ? "online" : "offline";
         html += "<div class='status-badge " + statusClass + "'>";
@@ -341,72 +335,96 @@ void handleRoot() {
         html += "</div>";
         html += "<p>Connected to: <strong>" + saved_ssid + "</strong></p>";
     }
-    html += "</div>";
-    
-    // Configuration Card
-    html += "<div class='card'>";
-    html += "<h2>⚙️ WiFi Configuration</h2>";
-    html += "<form action='/save' method='POST'>";
-    html += "<p><strong>WiFi Network:</strong></p>";
-    html += "<input type='text' name='ssid' placeholder='Enter WiFi name' style='width:100%;padding:10px;margin:10px 0;' required>";
-    html += "<p><strong>Password:</strong></p>";
-    html += "<input type='password' name='password' placeholder='Enter password' style='width:100%;padding:10px;margin:10px 0;'>";
-    html += "<button type='submit' class='button'>Save & Connect</button>";
-    html += "</form>";
-    html += "<p><small>After saving, ESP32 will try to connect. If successful, you'll get internet access.</small></p>";
-    html += "<p><small>If connection fails, AP will remain active for reconfiguration.</small></p>";
-    html += "</div>";
-    
-    // Info Card
-    html += "<div class='card'>";
-    html += "<h2>ℹ️ Information</h2>";
-    html += "<p><strong>AP SSID:</strong> " + String(ap_ssid) + "</p>";
-    html += "<p><strong>AP Password:</strong> " + String(ap_password) + "</p>";
     html += "<p><strong>Connected Clients:</strong> " + String(WiFi.softAPgetStationNum()) + "</p>";
-    html += "<p><strong>ESP32 IP:</strong> 192.168.4.1</p>";
-    html += "<div style='margin-top:15px;'>";
+    html += "<p><strong>ESP32 IP:</strong> 192.168.4.1 | <strong>Uptime:</strong> " + String(millis() / 1000) + "s</p>";
+    html += "</div>";
+    
+    html += "<div class='grid-2'>";
+    
+    // Station Configuration Card
+    html += "<div class='card'>";
+    html += "<h2>📶 Station WiFi</h2>";
+    html += "<div class='warning'>";
+    html += "💡 Connect ESP32 to your home/work WiFi network";
+    html += "</div>";
+    html += "<form action='/save-station' method='POST' accept-charset='UTF-8'>";
+    html += "<p><strong>WiFi Name (SSID):</strong></p>";
+    html += "<input type='text' name='ssid' placeholder='Enter WiFi name' value='" + saved_ssid + "' required>";
+    html += "<p><strong>Password:</strong></p>";
+    html += "<input type='password' name='password' placeholder='Enter password'>";
+    html += "<button type='submit' class='button'>💾 Save Station Config</button>";
+    html += "</form>";
+    if (stationConnected) {
+        html += "<p style='color:#28a745;margin-top:10px;'>✅ Currently connected to: " + saved_ssid + "</p>";
+    }
+    html += "</div>";
+    
+    // AP Configuration Card
+    html += "<div class='card'>";
+    html += "<h2>📱 Access Point</h2>";
+    html += "<div class='warning'>";
+    html += "💡 Configure the WiFi network that devices connect to ESP32";
+    html += "</div>";
+    html += "<form action='/save-ap' method='POST' accept-charset='UTF-8'>";
+    html += "<p><strong>AP SSID (Network Name):</strong></p>";
+    html += "<input type='text' name='ap_ssid' placeholder='AP SSID' value='" + current_ap + "' required>";
+    html += "<p><strong>AP Password:</strong></p>";
+    html += "<input type='text' name='ap_password' placeholder='AP Password' value='" + current_ap_pass + "'>";
+    html += "<p><small>Leave password empty for open network (not recommended)</small></p>";
+    html += "<button type='submit' class='button'>💾 Save AP Config</button>";
+    html += "</form>";
+    html += "<p><strong>Current AP:</strong> " + current_ap + "</p>";
+    html += "</div>";
+    
+    html += "</div>";
+    
+    // Action Buttons Card
+    html += "<div class='card'>";
+    html += "<h2>⚙️ System Actions</h2>";
+    html += "<div style='display:flex;gap:10px;flex-wrap:wrap;'>";
     html += "<a href='/scan' class='button'>🔍 Scan Networks</a>";
-    html += "<a href='/reboot' class='button'>🔄 Reboot</a>";
-    html += "<a href='/reset' class='button button-red'>🗑️ Reset All</a>";
+    html += "<a href='/reboot' class='button'>🔄 Reboot ESP32</a>";
+    html += "<a href='/reset' class='button button-red' onclick='return confirm(\"Reset all settings?\")'>🗑️ Factory Reset</a>";
     html += "</div>";
     html += "</div>";
     
     html += "<div class='footer'>";
-    html += "<p>ESP32 WiFi Router v3.0</p>";
+    html += "<p>ESP32 WiFi Router v4.0 | Supports Unicode & Spaces | " + String(__DATE__) + "</p>";
     html += "</div></div></body></html>";
     
     webServer.send(200, "text/html", html);
 }
 
-void handleSave() {
+void handleSaveStation() {
     if (webServer.method() == HTTP_POST) {
         String new_ssid = webServer.arg("ssid");
         String new_password = webServer.arg("password");
         
+        new_ssid.replace("+", " ");
+        
         if (new_ssid.length() > 0) {
-            Serial.println("\n📝 Saving new WiFi configuration:");
+            Serial.println("\n📝 Saving Station Configuration:");
             Serial.printf("   SSID: %s\n", new_ssid.c_str());
+            Serial.printf("   Password length: %d\n", new_password.length());
             
-            // Lưu vào Preferences
-            preferences.putString("ssid", new_ssid);
-            preferences.putString("password", new_password);
+            preferences.putString("sta_ssid", new_ssid);
+            preferences.putString("sta_pass", new_password);
             saved_ssid = new_ssid;
             saved_password = new_password;
             
             String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-            html += "<meta http-equiv='refresh' content='10;url=/'>";
-            html += "<title>Connecting...</title>";
-            html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;background:#667eea;color:white;}</style>";
+            html += "<meta http-equiv='refresh' content='5;url=/'>";
+            html += "<title>Saved</title>";
+            html += "<style>body{text-align:center;margin-top:50px;background:#667eea;color:white;font-family:Arial;}</style>";
             html += "</head><body>";
-            html += "<h1>📡 Connecting to WiFi...</h1>";
+            html += "<h1>✅ Station Configuration Saved!</h1>";
             html += "<p>Network: <strong>" + new_ssid + "</strong></p>";
-            html += "<p>Please wait 10 seconds...</p>";
-            html += "<p>If connection fails, AP will remain active.</p>";
+            html += "<p>ESP32 is now connecting...</p>";
+            html += "<p>Redirecting...</p>";
             html += "</body></html>";
             webServer.send(200, "text/html", html);
             
-            // Thử kết nối
-            delay(1000);
+            delay(500);
             connectToStation();
         } else {
             webServer.send(400, "text/plain", "SSID is required!");
@@ -414,55 +432,94 @@ void handleSave() {
     }
 }
 
+void handleSaveAP() {
+    if (webServer.method() == HTTP_POST) {
+        String new_ap_ssid = webServer.arg("ap_ssid");
+        String new_ap_password = webServer.arg("ap_password");
+        
+        new_ap_ssid.replace("+", " ");
+        
+        if (new_ap_ssid.length() > 0) {
+            Serial.println("\n📝 Saving AP Configuration:");
+            Serial.printf("   AP SSID: %s\n", new_ap_ssid.c_str());
+            Serial.printf("   AP Password: %s\n", new_ap_password.c_str());
+            
+            preferences.putString("ap_ssid", new_ap_ssid);
+            preferences.putString("ap_pass", new_ap_password);
+            saved_ap_ssid = new_ap_ssid;
+            saved_ap_password = new_ap_password;
+            
+            // Restart AP with new config
+            WiFi.mode(WIFI_AP);
+            if (new_ap_password.length() > 0) {
+                WiFi.softAP(new_ap_ssid.c_str(), new_ap_password.c_str(), 6, 0, 4);
+            } else {
+                WiFi.softAP(new_ap_ssid.c_str(), NULL, 6, 0, 4);
+            }
+            
+            String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            html += "<meta http-equiv='refresh' content='3;url=/'>";
+            html += "<title>Saved</title>";
+            html += "<style>body{text-align:center;margin-top:50px;background:#667eea;color:white;font-family:Arial;}</style>";
+            html += "</head><body>";
+            html += "<h1>✅ AP Configuration Saved!</h1>";
+            html += "<p>New AP SSID: <strong>" + new_ap_ssid + "</strong></p>";
+            html += "<p>You may need to reconnect to the new WiFi network.</p>";
+            html += "<p>Redirecting...</p>";
+            html += "</body></html>";
+            webServer.send(200, "text/html", html);
+        } else {
+            webServer.send(400, "text/plain", "AP SSID is required!");
+        }
+    }
+}
+
 void handleWiFiScan() {
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-    html += "<meta http-equiv='refresh' content='10'>";
+    html += "<meta http-equiv='refresh' content='15'>";
     html += "<title>WiFi Scan</title>";
-    html += "<style>body{font-family:Arial;margin:20px;background:#667eea;}";
+    html += "<style>";
+    html += "body{font-family:Arial;margin:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);}";
     html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
     html += "table{width:100%;border-collapse:collapse;}";
     html += "td,th{padding:8px;border-bottom:1px solid #ddd;}";
+    html += "tr:hover{background:#f5f5f5;cursor:pointer;}";
     html += ".button{display:inline-block;padding:10px 20px;background:#667eea;color:white;text-decoration:none;border-radius:5px;}";
-    html += "</style></head><body>";
+    html += ".ssid{font-weight:bold;}";
+    html += "</style>";
+    html += "<script>";
+    html += "function selectSSID(ssid) {";
+    html += "  document.getElementById('ssid_input').value = ssid;";
+    html += "  alert('SSID \\'' + ssid + '\\' copied! You can now go back and save.');";
+    html += "}";
+    html += "</script>";
+    html += "</head><body>";
     html += "<div class='container'>";
     html += "<h1>🔍 WiFi Networks</h1>";
+    html += "<input type='text' id='ssid_input' placeholder='Click on any network to copy' style='width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;'>";
     html += "|h2";
     html += "|<th>#</th><th>SSID</th><th>Signal</th><th>Security</th>|</tr>";
     
     int n = WiFi.scanNetworks();
     for (int i = 0; i < n && i < 20; i++) {
-        html += "|<tr>";
+        String ssid = WiFi.SSID(i);
+        html += "|<tr onclick='selectSSID(\"" + ssid + "\")' style='cursor:pointer;'>";
         html += "|<td>" + String(i + 1) + "|</td>";
-        html += "|<td>" + WiFi.SSID(i) + "|</td>";
+        html += "|<td class='ssid'>" + ssid + "|</td>";
         html += "|<td>" + String(WiFi.RSSI(i)) + " dBm|</td>";
-        html += "|<td>" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "Open" : "Secured") + "|</td>";
+        html += "|<td>" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "Open" : "🔒 Secured") + "|</td>";
         html += "|</tr>";
     }
     
+    if (n == 0) {
+        html += "|<tr><td colspan='4'>No networks found|</tr>";
+    }
+    
     html += "|</table>";
-    html += "<p><a href='/' class='button'>Back</a></p>";
+    html += "<p><a href='/' class='button'>← Back to Configuration</a></p>";
+    html += "<p><small>Click on any network name to copy it to the input field above.</small></p>";
     html += "</div></body></html>";
     
-    webServer.send(200, "text/html", html);
-}
-
-void handleConfigure() {
-    handleRoot();  // Redirect to root which has config form
-}
-
-void handleSwitchMode() {
-    // Force AP mode
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
-    stationConnected = false;
-    
-    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-    html += "<meta http-equiv='refresh' content='3;url=/'>";
-    html += "<title>Switching Mode</title>";
-    html += "<body style='text-align:center;margin-top:50px;'>";
-    html += "<h1>Switched to Configuration Mode</h1>";
-    html += "<p>ESP32 is now in AP-only mode</p>";
-    html += "</body></html>";
     webServer.send(200, "text/html", html);
 }
 
@@ -470,17 +527,23 @@ void handleResetConfig() {
     preferences.clear();
     saved_ssid = "";
     saved_password = "";
+    saved_ap_ssid = default_ap_ssid;
+    saved_ap_password = default_ap_password;
     stationConnected = false;
     
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
+    WiFi.softAP(default_ap_ssid, default_ap_password, 6, 0, 4);
     
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<meta http-equiv='refresh' content='5;url=/'>";
     html += "<title>Reset</title>";
-    html += "<body style='text-align:center;margin-top:50px;background:#667eea;color:white;'>";
-    html += "<h1>✅ Configuration Reset</h1>";
-    html += "<p>All settings cleared. ESP32 is now in configuration mode.</p>";
+    html += "<style>body{text-align:center;margin-top:50px;background:#667eea;color:white;font-family:Arial;}</style>";
+    html += "</head><body>";
+    html += "<h1>🗑️ Factory Reset Complete!</h1>";
+    html += "<p>All settings have been cleared.</p>";
+    html += "<p>AP SSID: <strong>" + String(default_ap_ssid) + "</strong></p>";
+    html += "<p>AP Password: <strong>" + String(default_ap_password) + "</strong></p>";
+    html += "<p>Redirecting...</p>";
     html += "</body></html>";
     webServer.send(200, "text/html", html);
 }
@@ -489,8 +552,9 @@ void handleReboot() {
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<meta http-equiv='refresh' content='10;url=/'>";
     html += "<title>Rebooting...</title>";
-    html += "<body style='text-align:center;margin-top:50px;background:#667eea;color:white;'>";
-    html += "<h1>🔄 Rebooting...</h1>";
+    html += "<style>body{text-align:center;margin-top:50px;background:#667eea;color:white;font-family:Arial;}</style>";
+    html += "</head><body>";
+    html += "<h1>🔄 Rebooting ESP32...</h1>";
     html += "<p>Please wait 10 seconds</p>";
     html += "</body></html>";
     webServer.send(200, "text/html", html);
@@ -506,8 +570,9 @@ void handleNotFound() {
 void handleStatusJSON() {
     String json = "{";
     json += "\"mode\":\"" + String(stationConnected ? "STA+AP" : "AP-ONLY") + "\",";
-    json += "\"station\":" + String(stationConnected ? "true" : "false") + ",";
-    json += "\"ssid\":\"" + saved_ssid + "\",";
+    json += "\"station_connected\":" + String(stationConnected ? "true" : "false") + ",";
+    json += "\"station_ssid\":\"" + saved_ssid + "\",";
+    json += "\"ap_ssid\":\"" + (saved_ap_ssid.length() > 0 ? saved_ap_ssid : default_ap_ssid) + "\",";
     json += "\"internet\":" + String(internetAvailable ? "true" : "false") + ",";
     json += "\"clients\":" + String(WiFi.softAPgetStationNum());
     json += "}";
