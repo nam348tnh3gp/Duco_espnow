@@ -2,6 +2,7 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <Preferences.h>
 
 // Cấu hình WiFi
 const char* sta_ssid = "Galaxy A05s 495e";
@@ -27,11 +28,21 @@ const long interval = 30000; // 30 giây
 bool internetAvailable = false;
 unsigned long lastInternetCheck = 0;
 
+// Preferences để lưu cấu hình
+Preferences preferences;
+String saved_ssid = "";
+String saved_password = "";
+
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n╔═══════════════════════════════════╗");
     Serial.println("║     ESP32 WiFi Router v2.0       ║");
     Serial.println("╚═══════════════════════════════════╝\n");
+    
+    // Khởi tạo Preferences
+    preferences.begin("wifi-config", false);
+    saved_ssid = preferences.getString("ssid", "");
+    saved_password = preferences.getString("password", "");
     
     // Bắt đầu ở chế độ Station + AP
     WiFi.mode(WIFI_AP_STA);
@@ -71,12 +82,19 @@ void loop() {
 
 void connectToStation() {
     Serial.println("📡 Connecting to Station...");
-    Serial.printf("   SSID: %s\n", sta_ssid);
     
-    WiFi.begin(sta_ssid, sta_password);
+    String ssid = saved_ssid.length() > 0 ? saved_ssid : String(sta_ssid);
+    String password = saved_password.length() > 0 ? saved_password : String(sta_password);
+    
+    Serial.printf("   SSID: %s\n", ssid.c_str());
+    
+    WiFi.begin(ssid.c_str(), password.c_str());
     
     int attempt = 0;
-    while (WiFi.status() != WL_CONNECTED && attempt < 20) {
+    unsigned long startAttemptTime = millis();
+    const unsigned long timeout = 10000; // 10 giây timeout
+    
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < timeout) {
         delay(500);
         Serial.print(".");
         attempt++;
@@ -95,6 +113,7 @@ void connectToStation() {
         Serial.println("   - Phone hotspot is active");
         Serial.println("   - SSID and password are correct");
         Serial.println("   - Phone is within range");
+        Serial.println("   Continuing in AP-only mode...");
     }
 }
 
@@ -103,10 +122,14 @@ void setupAccessPoint() {
     
     // Lấy channel từ station (nếu có)
     int canal = WiFi.channel();
-    if (canal == 0) canal = 6;
+    if (canal == 0 || canal > 11) canal = 6;
+    
+    // Đợi một chút trước khi cấu hình
+    delay(100);
     
     // Cấu hình IP cố định cho AP
-    WiFi.softAPConfig(ap_local_ip, ap_gateway, ap_subnet);
+    bool configSuccess = WiFi.softAPConfig(ap_local_ip, ap_gateway, ap_subnet);
+    Serial.printf("   AP Config: %s\n", configSuccess ? "OK" : "FAILED");
     
     // Khởi tạo AP
     bool apStarted = WiFi.softAP(ap_ssid, ap_password, canal, 0, 4);
@@ -115,11 +138,22 @@ void setupAccessPoint() {
         Serial.println("✅ AP started successfully!");
         Serial.printf("   🏠 SSID: %s\n", ap_ssid);
         Serial.printf("   🔑 Password: %s\n", ap_password);
+        
+        // Đợi AP ổn định
+        delay(500);
         Serial.printf("   🌐 IP Address: %s (FIXED)\n", WiFi.softAPIP().toString().c_str());
         Serial.printf("   📻 Channel: %d (synced with station)\n", canal);
         Serial.printf("   👥 Max clients: 4\n");
     } else {
         Serial.println("❌ AP failed to start!");
+        // Thử lại với cấu hình mặc định
+        Serial.println("   Retrying with default configuration...");
+        apStarted = WiFi.softAP(ap_ssid, ap_password, 6, 0, 4);
+        if (apStarted) {
+            Serial.println("   ✅ AP started on second attempt!");
+        } else {
+            Serial.println("   ❌ AP failed completely!");
+        }
     }
 }
 
@@ -127,14 +161,17 @@ void setupDNSAndWebServer() {
     Serial.println("\n🌐 Setting up DNS & Web Server...");
     
     // DNS server cho captive portal
-    dnsServer.start(DNS_PORT, "*", ap_local_ip);
+    bool dnsStarted = dnsServer.start(DNS_PORT, "*", ap_local_ip);
+    Serial.printf("   DNS Server: %s\n", dnsStarted ? "Started" : "Failed");
     
     // Web server routes
     webServer.on("/", handleRoot);
     webServer.on("/status", handleStatusJSON);
     webServer.on("/scan", handleWiFiScan);
     webServer.on("/configure", handleConfigure);
+    webServer.on("/save", HTTP_POST, handleSave);
     webServer.on("/reboot", handleReboot);
+    webServer.on("/reset", handleResetConfig);
     webServer.onNotFound(handleNotFound);
     
     webServer.begin();
@@ -147,6 +184,8 @@ void setupMDNS() {
     if (MDNS.begin("esp32")) {
         Serial.println("✅ mDNS responder started");
         Serial.println("   🌐 Access via: http://esp32.local");
+    } else {
+        Serial.println("❌ mDNS failed to start");
     }
 }
 
@@ -222,7 +261,9 @@ void handleStationReconnect() {
     if (WiFi.status() != WL_CONNECTED) {
         if (millis() - lastReconnect > 10000) {
             Serial.println("\n⚠️ Station disconnected! Reconnecting...");
-            WiFi.reconnect();
+            String ssid = saved_ssid.length() > 0 ? saved_ssid : String(sta_ssid);
+            String password = saved_password.length() > 0 ? saved_password : String(sta_password);
+            WiFi.begin(ssid.c_str(), password.c_str());
             lastReconnect = millis();
         }
     }
@@ -280,6 +321,8 @@ void handleRoot() {
     html += ".poor{color:#dc3545;}";
     html += ".button{display:inline-block;padding:10px 20px;margin:5px;background:#667eea;color:white;text-decoration:none;border-radius:5px;transition:0.3s;}";
     html += ".button:hover{background:#5a67d8;}";
+    html += ".button-red{background:#dc3545;}";
+    html += ".button-red:hover{background:#c82333;}";
     html += ".footer{text-align:center;color:white;margin-top:20px;font-size:0.8em;}";
     html += "</style></head><body>";
     
@@ -305,16 +348,16 @@ void handleRoot() {
     html += "<div class='card'>";
     html += "<h2>📶 Station Connection</h2>";
     if (WiFi.status() == WL_CONNECTED) {
-        html += "<table>";
-        html += "<tr><th>SSID:</th><td>" + String(sta_ssid) + "</td></tr>";
-        html += "<tr><th>IP Address:</th><td>" + WiFi.localIP().toString() + "</td></tr>";
-        html += "<tr><th>Gateway:</th><td>" + WiFi.gatewayIP().toString() + "</td></tr>";
-        html += "<tr><th>DNS:</th><td>" + WiFi.dnsIP().toString() + "</td></tr>";
+        html += "| Somme";
+        html += "|<th>SSID:</th>|<td>" + String(saved_ssid.length() > 0 ? saved_ssid : sta_ssid) + "|</tr>";
+        html += "|<th>IP Address:</th>|<td>" + WiFi.localIP().toString() + "|</tr>";
+        html += "|<th>Gateway:</th>|<td>" + WiFi.gatewayIP().toString() + "|</tr>";
+        html += "|<th>DNS:</th>|<td>" + WiFi.dnsIP().toString() + "|</tr>";
         int rssi = WiFi.RSSI();
         String signalClass = (rssi > -60) ? "good" : (rssi > -70) ? "fair" : "poor";
-        html += "<tr><th>Signal:</th><td class='signal " + signalClass + "'>" + String(rssi) + " dBm</td></tr>";
-        html += "<tr><th>Channel:</th><td>" + String(WiFi.channel()) + "</td></tr>";
-        html += "</table>";
+        html += "|<th>Signal:</th><td class='signal " + signalClass + "'>" + String(rssi) + " dBm|</tr>";
+        html += "|<th>Channel:</th>|<td>" + String(WiFi.channel()) + "|</tr>";
+        html += "|</table>";
     } else {
         html += "<p>❌ Not connected to any WiFi network</p>";
         html += "<a href='/scan' class='button'>🔍 Scan Networks</a>";
@@ -324,26 +367,27 @@ void handleRoot() {
     // AP Info
     html += "<div class='card'>";
     html += "<h2>📱 Access Point</h2>";
-    html += "<table>";
-    html += "<tr><th>SSID:</th><td>" + String(ap_ssid) + "</td></tr>";
-    html += "<tr><th>IP Address:</th><td><strong>192.168.4.1</strong> (Fixed)</td></tr>";
-    html += "<tr><th>Connected Clients:</th><td>" + String(WiFi.softAPgetStationNum()) + "</td></tr>";
-    html += "<tr><th>Channel:</th><td>" + String(WiFi.channel()) + "</td></tr>";
-    html += "</table>";
+    html += "| nee";
+    html += "|<th>SSID:</th>|<td>" + String(ap_ssid) + "|</tr>";
+    html += "|<th>IP Address:</th>|<td><strong>192.168.4.1</strong> (Fixed)|</tr>";
+    html += "|<th>Connected Clients:</th>|<td>" + String(WiFi.softAPgetStationNum()) + "|</tr>";
+    html += "|<th>Channel:</th>|<td>" + String(WiFi.channel()) + "|</tr>";
+    html += "|</table>";
     html += "</div>";
     
     // System Info
     html += "<div class='card'>";
     html += "<h2>⚙️ System</h2>";
-    html += "<table>";
-    html += "<tr><th>Uptime:</th><td>" + String(millis() / 1000) + " seconds</td></tr>";
-    html += "<tr><th>Free Heap:</th><td>" + String(ESP.getFreeHeap() / 1024) + " KB</td></tr>";
-    html += "<tr><th>Chip:</th><td>" + String(ESP.getChipModel()) + "</td></tr>";
-    html += "<tr><th>Flash Size:</th><td>" + String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</td></tr>";
-    html += "</table>";
+    html += "| some";
+    html += "|<th>Uptime:</th>|<td>" + String(millis() / 1000) + " seconds|</tr>";
+    html += "|<th>Free Heap:</th>|<td>" + String(ESP.getFreeHeap() / 1024) + " KB|</tr>";
+    html += "|<th>Chip:</th>|<td>" + String(ESP.getChipModel()) + "|</tr>";
+    html += "|<th>Flash Size:</th>|<td>" + String(ESP.getFlashChipSize() / 1024 / 1024) + " MB|</tr>";
+    html += "|</table>";
     html += "<div style='margin-top:15px;'>";
     html += "<a href='/reboot' class='button' onclick='return confirm(\"Reboot ESP32?\")'>🔄 Reboot</a>";
     html += "<a href='/configure' class='button'>⚙️ Configure</a>";
+    html += "<a href='/reset' class='button button-red' onclick='return confirm(\"Reset all WiFi configurations?\")'>🗑️ Reset Config</a>";
     html += "</div>";
     html += "</div>";
     
@@ -359,7 +403,7 @@ void handleStatusJSON() {
     String json = "{";
     json += "\"station\":{";
     json += "\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
-    json += "\"ssid\":\"" + String(sta_ssid) + "\",";
+    json += "\"ssid\":\"" + String(saved_ssid.length() > 0 ? saved_ssid : sta_ssid) + "\",";
     json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
     json += "\"rssi\":" + String(WiFi.RSSI());
     json += "},";
@@ -383,7 +427,7 @@ void handleWiFiScan() {
     html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
     html += "table{width:100%;border-collapse:collapse;}";
     html += "td,th{padding:8px;border-bottom:1px solid #ddd;}";
-    html += ".button{display:inline-block;padding:10px 20px;background:#667eea;color:white;text-decoration:none;border-radius:5px;}";
+    html += ".button{display:inline-block;padding:10px 20px;background:#667eea;color:white;text-decoration:none;border-radius:5px;margin-top:10px;}";
     html += "</style></head><body>";
     html += "<div class='container'>";
     html += "<h1>🔍 WiFi Networks</h1>";
@@ -402,6 +446,7 @@ void handleWiFiScan() {
     
     html += "</table>";
     html += "<p><a href='/' class='button'>Back to Status</a></p>";
+    html += "<p><a href='/configure' class='button'>Configure New WiFi</a></p>";
     html += "</div></body></html>";
     
     webServer.send(200, "text/html", html);
@@ -410,22 +455,95 @@ void handleWiFiScan() {
 void handleConfigure() {
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
     html += "<title>Configure WiFi</title>";
-    html += "<style>body{font-family:Arial;margin:20px;background:#667eea;}";
+    html += "<style>";
+    html += "body{font-family:Arial;margin:20px;background:#667eea;}";
     html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
     html += "input{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;}";
-    html += "button{padding:10px 20px;background:#667eea;color:white;border:none;border-radius:5px;}";
+    html += "button{padding:10px 20px;background:#667eea;color:white;border:none;border-radius:5px;cursor:pointer;}";
+    html += "button:hover{background:#5a67d8;}";
+    html += ".info{background:#d1ecf1;padding:10px;border-radius:5px;margin-bottom:15px;}";
     html += "</style></head><body>";
     html += "<div class='container'>";
     html += "<h1>⚙️ Configure Station WiFi</h1>";
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        html += "<div class='info'>✅ Currently connected to: <strong>" + String(saved_ssid.length() > 0 ? saved_ssid : sta_ssid) + "</strong></div>";
+    }
+    
     html += "<form action='/save' method='POST'>";
-    html += "<label>SSID:</label><input type='text' name='ssid' placeholder='WiFi Name'>";
-    html += "<label>Password:</label><input type='password' name='password' placeholder='Password'>";
+    html += "<label>WiFi SSID:</label>";
+    html += "<input type='text' name='ssid' placeholder='Enter WiFi name' required>";
+    html += "<label>Password:</label>";
+    html += "<input type='password' name='password' placeholder='Enter password'>";
     html += "<button type='submit'>Save & Connect</button>";
     html += "</form>";
-    html += "<p><a href='/'>Back</a></p>";
+    html += "<p style='margin-top:15px;'><a href='/'>Back to Status</a></p>";
     html += "</div></body></html>";
     
     webServer.send(200, "text/html", html);
+}
+
+void handleSave() {
+    if (webServer.method() == HTTP_POST) {
+        String new_ssid = webServer.arg("ssid");
+        String new_password = webServer.arg("password");
+        
+        String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+        html += "<meta http-equiv='refresh' content='5;url=/'>";
+        html += "<title>Saving...</title>";
+        html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;background:#667eea;color:white;}</style>";
+        html += "</head><body>";
+        
+        if (new_ssid.length() > 0) {
+            Serial.println("\n📝 New WiFi credentials received:");
+            Serial.printf("   SSID: %s\n", new_ssid.c_str());
+            Serial.printf("   Password: %s\n", new_password.c_str());
+            
+            // Lưu vào Preferences
+            preferences.putString("ssid", new_ssid);
+            preferences.putString("password", new_password);
+            saved_ssid = new_ssid;
+            saved_password = new_password;
+            
+            html += "<h1>✅ Credentials Saved!</h1>";
+            html += "<p>Connecting to new WiFi network: <strong>" + new_ssid + "</strong></p>";
+            html += "<p>Please wait...</p>";
+            webServer.send(200, "text/html", html);
+            
+            // Ngắt kết nối hiện tại và kết nối mới
+            WiFi.disconnect();
+            delay(1000);
+            WiFi.begin(new_ssid.c_str(), new_password.c_str());
+        } else {
+            html += "<h1>❌ Error!</h1>";
+            html += "<p>SSID is required!</p>";
+            html += "<p>Redirecting...</p>";
+            webServer.send(200, "text/html", html);
+        }
+        html += "</body></html>";
+    } else {
+        webServer.send(405, "text/plain", "Method Not Allowed");
+    }
+}
+
+void handleResetConfig() {
+    preferences.clear();
+    saved_ssid = "";
+    saved_password = "";
+    
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+    html += "<meta http-equiv='refresh' content='5;url=/'>";
+    html += "<title>Reset Config</title>";
+    html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;background:#667eea;color:white;}</style>";
+    html += "</head><body>";
+    html += "<h1>🗑️ Configuration Reset!</h1>";
+    html += "<p>All WiFi settings have been cleared.</p>";
+    html += "<p>ESP32 will restart in 5 seconds...</p>";
+    html += "</body></html>";
+    
+    webServer.send(200, "text/html", html);
+    delay(5000);
+    ESP.restart();
 }
 
 void handleReboot() {
