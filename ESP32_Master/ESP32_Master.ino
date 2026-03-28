@@ -16,6 +16,7 @@
 #include "MiningJob.h"
 #include "DSHA1.h"
 #include "Counter.h"
+double hashrate_core_two = 0;
 
 // Structure for ESP-NOW data
 typedef struct struct_message {
