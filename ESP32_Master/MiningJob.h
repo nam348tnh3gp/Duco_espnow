@@ -1,3 +1,4 @@
+#include "esp_task_wdt.h"
 #pragma GCC optimize("-Ofast")
 
 #ifndef MINING_JOB_H
