@@ -16,6 +16,9 @@
 #include "MiningJob.h"
 #include "DSHA1.h"
 #include "Counter.h"
+#include "esp_task_wdt.h"
+
+// Khai báo biến toàn cục
 double hashrate_core_two = 0;
 
 // Structure for ESP-NOW data
@@ -44,7 +47,7 @@ struct JobInfo {
   char expectedHash[41];
   uint32_t difficulty;
   bool active;
-  bool completed;      // Đánh dấu job đã được mining xong
+  bool completed;
   uint32_t assignedTo;
   unsigned long assignedTime;
   unsigned long completedTime;
@@ -85,6 +88,23 @@ uint32_t activeJobsCount = 0;
 uint32_t completedJobsCount = 0;
 unsigned long lastJobRefreshTime = 0;
 bool refreshingJobs = false;
+
+// ========== PROTOTYPES ==========
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
+void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len);
+bool addSlave(uint8_t *mac);
+bool fetchSingleJob(uint32_t jobIndex);
+void fetchJobs();
+bool needJobRefresh();
+void distributeJobs();
+void updateTotalHashrate();
+void printStatus();
+void checkInactiveSlaves();
+void setupWiFi();
+void initESPNow();
+void blink(uint8_t count);
+
+// ========== ESP-NOW CALLBACKS ==========
 
 // Callback when data is sent
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -147,6 +167,8 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 }
 
+// ========== SLAVE MANAGEMENT ==========
+
 // Add slave to network
 bool addSlave(uint8_t *mac) {
   if(slaveCount >= MAX_SLAVES) return false;
@@ -188,6 +210,8 @@ bool addSlave(uint8_t *mac) {
   
   return true;
 }
+
+// ========== JOB MANAGEMENT ==========
 
 // Fetch a single job from node
 bool fetchSingleJob(uint32_t jobIndex) {
@@ -335,6 +359,8 @@ void distributeJobs() {
   Serial.printf("=== Distributed %d/%d jobs ===\n\n", assignedCount, activeJobsCount);
 }
 
+// ========== STATISTICS ==========
+
 // Calculate total hashrate (average over all slaves)
 void updateTotalHashrate() {
   totalHashrate = 0;
@@ -392,6 +418,8 @@ void printStatus() {
   Serial.println("═══════════════════════════════════════════════════════════\n");
 }
 
+// ========== SLAVE MONITORING ==========
+
 // Check for inactive slaves
 void checkInactiveSlaves() {
   unsigned long now = millis();
@@ -409,6 +437,8 @@ void checkInactiveSlaves() {
     }
   }
 }
+
+// ========== WIFI SETUP ==========
 
 // Setup WiFi and connection to Duino-Coin node
 void setupWiFi() {
@@ -430,6 +460,44 @@ void setupWiFi() {
     Serial.println("\n✗ WiFi connection failed!");
   }
 }
+
+// ========== ESP-NOW INIT ==========
+
+// Initialize ESP-NOW
+void initESPNow() {
+  Serial.println("\nInitializing ESP-NOW...");
+  
+  // Set WiFi to station mode
+  WiFi.mode(WIFI_STA);
+  
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  
+  // Register callbacks
+  esp_now_register_send_cb(OnDataSent);
+  esp_now_register_recv_cb(OnDataRecv);
+  
+  Serial.println("ESP-NOW initialized successfully");
+  Serial.printf("ESP-NOW Channel: %d\n", ESPNOW_CHANNEL);
+}
+
+// ========== BLINK FUNCTION ==========
+
+void blink(uint8_t count) {
+  #if defined(LED_BLINKING)
+    for(int x = 0; x < count; x++) {
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+    }
+  #endif
+}
+
+// ========== SETUP & LOOP ==========
 
 void setup() {
   Serial.begin(SERIAL_BAUDRATE);
@@ -497,15 +565,4 @@ void loop() {
   }
   
   delay(10);
-}
-
-void blink(uint8_t count) {
-  #if defined(LED_BLINKING)
-    for(int x = 0; x < count; x++) {
-      digitalWrite(LED_BUILTIN, LOW);
-      delay(100);
-      digitalWrite(LED_BUILTIN, HIGH);
-      delay(100);
-    }
-  #endif
 }
